@@ -1,0 +1,79 @@
+import requests
+import datetime
+import random
+from bs4 import BeautifulSoup
+from sumy.parsers.html import HtmlParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
+from sumy.nlp.stemmers import Stemmer
+from sumy.utils import get_stop_words
+import concurrent.futures
+import time
+import nltk
+
+nltk.download('punkt')
+
+today = datetime.date.today()
+last_monday = today - datetime.timedelta(days=today.weekday()) - datetime.timedelta(days=0)
+
+links = set()
+count = 0
+page_num = 0
+
+while count < 10:
+    search_params = {
+        "q": f"technology:{last_monday}+until:{today}",
+        "tbm": "nws",
+        "start": page_num
+    }
+    response = requests.get("https://www.google.com/search", params=search_params)
+    print("Found {} usable links".format(len(links)))
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # use ThreadPoolExecutor to send multiple requests at once
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = []
+        for link in soup.find_all('a'):
+            href = link.get('href')
+            if href and href.startswith('/url?q='):
+                url = href[7:]
+                if not url.startswith('http'):
+                    continue
+                if 'support.google.com' in url:
+                    continue
+                futures.append(executor.submit(requests.get, url))
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                r = future.result()
+                if r.status_code == 200:
+                    links.add(r.url)
+                    count += 1
+                    if count >= 10:
+                        break
+            except requests.exceptions.RequestException as e:
+                print(e)
+                continue
+        if count >= 10:
+            break
+    
+    page_num += 10
+    
+    # wait for a few seconds before checking the next page to avoid overwhelming the server
+    time.sleep(1)
+
+random_link = random.choice(list(links))
+response = requests.get(random_link)
+LANGUAGE = 'english'
+SENTENCES_COUNT = 12
+parser = HtmlParser.from_url(random_link, Tokenizer(LANGUAGE))
+stemmer = Stemmer(LANGUAGE)
+summarizer = LsaSummarizer(stemmer)
+summarizer.stop_words = get_stop_words(LANGUAGE)
+summary = []
+for sentence in summarizer(parser.document, SENTENCES_COUNT):
+        summary.append(str(sentence))
+summary = summary[2:]
+print("Link: ", random_link)
+print("Summary: ")
+for sentence in summary:
+    print(sentence)
